@@ -4,7 +4,8 @@
   "description": "Turn JSX into function calls with extended syntax",
   "main": "lib/index.js",
   "scripts": {
-    "dist": "mkdir -p lib && babel --presets es2015 src/index.js --out-file lib/index.js"
+    "dist": "mkdir -p lib && babel --presets es2015 src/index.js --out-file lib/index.js",
+    "preversion": "npm run-script dist && git add --force lib/*.js"
   },
   "author": "renanhangai <hangai.renan@gmail.com>",
   "license": "MIT",
