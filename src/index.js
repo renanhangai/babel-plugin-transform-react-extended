@@ -19,7 +19,9 @@ const TEMPLATES = {
 	'rx-outer-if': {
 		priority: 2000,
 		fn: function({path, value, opts, t}) {
-			const expr = t.conditionalExpression( value, path.node, t.nullLiteral() );
+			const elseExpr = path.node._reactExtendedArray ? t.arrayExpression([]) : t.nullLiteral();
+			const expr = t.conditionalExpression( value, path.node, elseExpr );
+			expr._reactExtendedArray  = path.node._reactExtendedArray;
 			path.replaceWith( expr );
 		}
 	},
@@ -72,7 +74,11 @@ const TEMPLATES = {
 				objArg,
 				t.arrowFunctionExpression( [t.identifier("$value"), t.identifier("$key")], bodyStatement )
 			];
-			path.replaceWith( t.callExpression( utils.map, mapArgs ) );
+
+
+			let expr = t.callExpression( utils.map, mapArgs );
+			expr._reactExtendedArray = true;
+			path.replaceWith( expr );
 		}
 	}
 };
@@ -96,9 +102,68 @@ module.exports = function( babel ) {
 	const oldJSXElement = visitor.JSXElement;
 	visitor.JSXElement = {
 		exit: function( path, state ) {
+			let virtualContent = null;
+
+			/**
+			 Check for rx-virtual node
+
+			 A virtual node does not exist, and is replace by an array of the internal contents
+			 Care must be taken so the array will be flattened.
+			 */
+			if ( path.node.openingElement.name.name === 'rx-virtual' ) {
+				let lastVirtual = t.arrayExpression([]);
+				
+				virtualContent = lastVirtual;
+				function virtualConcatElement( element, isArray ) {
+					if ( isArray ) {
+						if ( t.isArrayExpression( virtualContent ) && virtualContent.elements.length <= 0 ) {
+
+							virtualContent = element;
+							lastVirtual    = null;
+							return;
+						}
+						let concat = t.memberExpression( virtualContent,
+														 t.identifier( 'concat' ) );
+						virtualContent = t.callExpression( concat, [element] );
+						lastVirtual = null;
+						return;
+					}
+
+					if ( !lastVirtual ) {
+						lastVirtual = t.arrayExpression([]);
+						let concat = t.memberExpression( virtualContent,
+														 t.identifier( 'concat' ) );
+						virtualContent = t.callExpression( concat, [lastVirtual] );
+					}		
+					lastVirtual.elements.push( element );	
+				}
+
+				
+				path.node.children.forEach( (item) => {
+					if ( t.isJSXText( item ) ) {
+						const newValue = item.value.replace(/\n\s+/g, " ").trim();
+						if ( !newValue )
+							return;
+						virtualConcatElement( t.stringLiteral( newValue ) );
+					} else if ( t.isJSXExpressionContainer( item ) ) {
+						virtualConcatElement( item.expression );
+					} else if ( item._reactExtendedArray ) {
+						virtualConcatElement( item, true );
+					} else {
+						virtualConcatElement( item );
+					}
+				});
+			}
+
+
+			// Original replace the node
 			oldJSXElement.exit( path, state );
+
+			// Check for attributes
 			if ( t.isCallExpression(path.node) ) {
 				const attrs = path.node.arguments[1];
+				if ( virtualContent )
+					path.replaceWith( virtualContent );
 				reactExtend( path, attrs, state.opts );
 			}
 		}
