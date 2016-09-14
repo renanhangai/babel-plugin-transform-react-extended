@@ -9,7 +9,15 @@ const extend  = require( 'extend' );
 const TEMPLATES = {
 	// If element
 	'rx-if': {
-		priority:  1000,
+		priority:  0,
+		fn: function({path, value, opts, t}) {
+			const expr = t.conditionalExpression( value, path.node, t.nullLiteral() );
+			path.replaceWith( expr );
+		}
+	},
+	// outer-if element
+	'rx-outer-if': {
+		priority: 2000,
 		fn: function({path, value, opts, t}) {
 			const expr = t.conditionalExpression( value, path.node, t.nullLiteral() );
 			path.replaceWith( expr );
@@ -17,6 +25,7 @@ const TEMPLATES = {
 	},
 	// rx-repeat statement
 	'rx-repeat': {
+		priority: 1000,
 		fn: function({path, value, opts, utils, t}) {
 			let valueArg = null, keyArg = null, objArg = null;
 			if ( t.isBinaryExpression( value, { operator: 'in' } ) ) {
@@ -88,7 +97,6 @@ module.exports = function( babel ) {
 	visitor.JSXElement = {
 		exit: function( path, state ) {
 			oldJSXElement.exit( path, state );
-
 			if ( t.isCallExpression(path.node) ) {
 				const attrs = path.node.arguments[1];
 				reactExtend( path, attrs, state.opts );
@@ -141,7 +149,7 @@ module.exports = function( babel ) {
 		}).filter( Boolean );
 
 		// Every template
-		templates.sort( (a, b) => b.priority - a.priority );
+		templates.sort( (a, b) => a.priority - b.priority );
 		templates.forEach(function( template ) {
 			template.fn({
 				path:  path,
