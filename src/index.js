@@ -85,7 +85,7 @@ const TEMPLATES = {
 
 // Utility
 const UTILS = {
-	map: '$.map'
+	map: 'import * as map from "lodash/map"'
 };
 
 /*
@@ -164,24 +164,50 @@ module.exports = function( babel ) {
 				const attrs = path.node.arguments[1];
 				if ( virtualContent )
 					path.replaceWith( virtualContent );
-				reactExtend( path, attrs, state.opts );
+				reactExtend( path, state, attrs, state.opts );
 			}
 		}
 	};
 	
 	// Parse expression
-	function parseExpression( str ) {
-		let expr = parse(`(${str})`);
-		expr = expr.program.body[0].expression;
-		babel.traverse.removeProperties(expr);
-		return expr;
+	function parseExpression( str, state ) {
+		let expr = parse( str, { sourceType: 'module' } ).program.body[0];
+
+		if ( expr.type === "ImportDeclaration" ) {
+			let imported = null;
+			if ( expr.specifiers ) {
+				if ( expr.specifiers.length === 0 ) {
+					imported = 'default';
+				} else if ( expr.specifiers.length === 1 ) {
+					if ( expr.specifiers[0].type === 'ImportNamespaceSpecifier' ) {
+						imported = '*';
+					} else if ( expr.specifiers[0].type === 'ImportDefaultSpecifier' ) {
+						imported = 'default';
+					} else if ( expr.specifiers[0].type === 'ImportSpecifier' ) {
+						imported = expr.specifiers[0].imported.name;
+					}
+				}
+			}
+			if ( !imported ) {
+				throw new Error(
+					`Invalid specifier declaration for react-extended utils.` +
+						`Used '${str}'.`
+				);
+			}	
+			return state.addImport( expr.source.value, imported, 'map' );
+		} else if ( expr.type === 'ExpressionStatement' ) {
+			expr = expr.expression;
+			babel.traverse.removeProperties(expr);
+			return expr;
+		}
+		throw new Error( "Invalid expression for react-extended utils" );
 	}
 
 
 	/*
 	 Extend the react
 	 */
-	function reactExtend( path, attrs, opts ) {
+	function reactExtend( path, state, attrs, opts ) {
 		// Attrs
 		if ( !t.isObjectExpression( attrs ) )
 			return;
@@ -189,7 +215,7 @@ module.exports = function( babel ) {
 		//
 		const utils = extend({}, UTILS, (opts && opts.utils) );
 		for ( let key in utils )
-			utils[key] = parseExpression( utils[key] );
+			utils[key] = parseExpression( utils[key], state );
 		
 		const templates = [];
 		attrs.properties = attrs.properties.map(function( item ) {
