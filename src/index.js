@@ -76,7 +76,7 @@ const TEMPLATES = {
 			];
 
 
-			let expr = t.callExpression( utils.map, mapArgs );
+			let expr = t.callExpression( utils.map(), mapArgs );
 			expr._reactExtendedArray = true;
 			path.replaceWith( expr );
 		}
@@ -85,7 +85,26 @@ const TEMPLATES = {
 
 // Utility
 const UTILS = {
-	map: 'import * as map from "lodash/map"'
+	map: ''+function( obj, cb ) {
+		const isArray =  Array.isArray ? Array.isArray( obj ) :
+			Object.prototype.toString.call( obj ) === '[object Array]'
+		;
+		let ret = [];
+		if ( isArray ) {
+			for ( let i = 0; i < obj.length; ++i ) {
+				let v = cb( obj[i], i );
+				if ( v != null )
+					ret.push( v );
+			}
+		} else {
+			for ( let key in obj ) {
+				let v = cb( obj[key], key );
+				if ( v != null )
+					ret.push( v );
+			}
+		}
+		return Array.prototype.concat.apply([], ret);
+	}
 };
 
 /*
@@ -170,37 +189,70 @@ module.exports = function( babel ) {
 	};
 	
 	// Parse expression
-	function parseExpression( str, state ) {
-		let expr = parse( str, { sourceType: 'module' } ).program.body[0];
+	function tryParse( str, options ) {
+		try {
+			return parse( str, options );
+		} catch( err ) {
+			return null;
+		}
+	}
+	function parseExpression( str, state, key ) {
+		let UID = null;
+		return function() {
+			if ( UID )
+				return UID;
+			
+			let expr = tryParse( `(${str})`, { sourceType: 'module' } ) || tryParse( str, { sourceType: 'module' } );
+			if ( expr == null )
+				throw new Error( "Invalid expression for react-extended utils" );
 
-		if ( expr.type === "ImportDeclaration" ) {
-			let imported = null;
-			if ( expr.specifiers ) {
-				if ( expr.specifiers.length === 0 ) {
-					imported = 'default';
-				} else if ( expr.specifiers.length === 1 ) {
-					if ( expr.specifiers[0].type === 'ImportNamespaceSpecifier' ) {
-						imported = '*';
-					} else if ( expr.specifiers[0].type === 'ImportDefaultSpecifier' ) {
+			expr = expr.program.body[0];
+			if ( expr.type === "ImportDeclaration" ) {
+				let imported = null;
+				if ( expr.specifiers ) {
+					if ( expr.specifiers.length === 0 ) {
 						imported = 'default';
-					} else if ( expr.specifiers[0].type === 'ImportSpecifier' ) {
-						imported = expr.specifiers[0].imported.name;
+					} else if ( expr.specifiers.length === 1 ) {
+						if ( expr.specifiers[0].type === 'ImportNamespaceSpecifier' ) {
+							imported = '*';
+						} else if ( expr.specifiers[0].type === 'ImportDefaultSpecifier' ) {
+							imported = 'default';
+						} else if ( expr.specifiers[0].type === 'ImportSpecifier' ) {
+							imported = expr.specifiers[0].imported.name;
+						}
 					}
 				}
+				if ( !imported ) {
+					throw new Error(
+						`Invalid specifier declaration for react-extended utils.` +
+							`Used '${str}'.`
+					);
+				}	
+				UID = state.addImport( expr.source.value, imported, 'map' );
+				return UID;
+			} else if ( expr.type === 'ExpressionStatement' ) {
+				expr = expr.expression;
+				if ( ( expr.type === 'FunctionExpression' ) || ( expr.type === 'FunctionDeclaration' ) ) {
+					let name   = 'react-extended-util-'+key;
+
+					let file = state.file || state;
+					let declar = file.declarations[name];
+					if ( declar )
+						return declar;
+					UID = file.declarations[name] = file.scope.generateUidIdentifier( 'map' );
+					expr.type = "FunctionDeclaration";
+					expr.id   = UID;
+					expr._generated    = true;
+					expr.body._compact = true;
+					file.path.unshiftContainer( "body", expr );
+					return UID;
+				} 
+				babel.traverse.removeProperties(expr);
+				UID = expr;
+				return UID;
 			}
-			if ( !imported ) {
-				throw new Error(
-					`Invalid specifier declaration for react-extended utils.` +
-						`Used '${str}'.`
-				);
-			}	
-			return state.addImport( expr.source.value, imported, 'map' );
-		} else if ( expr.type === 'ExpressionStatement' ) {
-			expr = expr.expression;
-			babel.traverse.removeProperties(expr);
-			return expr;
-		}
-		throw new Error( "Invalid expression for react-extended utils" );
+			throw new Error( "Invalid expression for react-extended utils" );
+		};
 	}
 
 
@@ -214,8 +266,9 @@ module.exports = function( babel ) {
 
 		//
 		const utils = extend({}, UTILS, (opts && opts.utils) );
-		for ( let key in utils )
-			utils[key] = parseExpression( utils[key], state );
+		for ( let key in utils ) {
+			utils[key] = parseExpression( utils[key], state, key );
+		}
 		
 		const templates = [];
 		attrs.properties = attrs.properties.map(function( item ) {
